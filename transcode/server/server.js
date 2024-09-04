@@ -315,6 +315,7 @@ console.log("Chapter:-----",chapter)
             }).promise();
 
             console.log("SUCCESS")
+          await callResolution()
             await terminateInstance()
 
     } catch (err) {
