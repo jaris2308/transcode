@@ -178,6 +178,7 @@ async function uploadFileToS3(filePath, bucketName, key) {
 async function transcodeToAllResolutions(queueUrl) {
     const tempFiles = [];
     try { 
+        console.log("transcoede to all resolutions",queueUrl)
          const data = await sqs.receiveMessage({
           QueueUrl: queueUrl,
           MaxNumberOfMessages: 1,
@@ -195,6 +196,7 @@ async function transcodeToAllResolutions(queueUrl) {
 
         tempbucket=messageBody.videoKey
            const  localInputPath = await downloadInputFromS3(messageBody.videoKey);
+        console.log("LocalInputPath",localInputPath)
         tempFiles.push(localInputPath);
 
         const resolutions = [
@@ -320,6 +322,7 @@ console.log("Chapter:-----",chapter)
     }
 }
 const callResolution=async()=>{
+    console.log("Inside call resolution")
     let queues=[];
     let queuesize=0;
     queues=await getAllqueueURL()
