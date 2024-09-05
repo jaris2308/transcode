@@ -293,7 +293,7 @@ console.log("Chapter:-----",chapter)
   console.log('Course created and updated:', updatedCourse);
 
 } 
-                else{
+            
           
             }
           }
@@ -323,7 +323,7 @@ console.log("Chapter:-----",chapter)
 
             console.log("SUCCESS")
           await callResolution()
-            }
+            
             
 
     } catch (err) {
