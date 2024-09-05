@@ -280,13 +280,20 @@ console.log("Chapter:-----",chapter)
             if (result.length > 0) {
               const totalDuration = result[0].totalDuration;
              console.log("Total Duration",totalDuration)
-              const updatedCourse = await Course.findOneAndUpdate(
-                { title_id: messageBody.courseId },
-                { $set: { courseDuration: totalDuration } },
-                { new: true }
-              ).populate("mentor", "_id name").exec();
+              const existingCourse = await Course.findOne({ title_id: messageBody.courseId }).exec();
 
-              console.log("Updated Course:-----",updatedCourse)
+        if (!existingCourse) {
+
+      const updatedCourse = await Course.findOneAndUpdate(
+        { title_id: messageBody.courseId },
+        { $set: { courseDuration: totalDuration } },
+        { new: true } 
+        ).populate("mentor", "_id name").exec();
+
+  console.log('Course created and updated:', updatedCourse);
+
+} 
+                else{
           
             }
           }
@@ -316,7 +323,8 @@ console.log("Chapter:-----",chapter)
 
             console.log("SUCCESS")
           await callResolution()
-            await terminateInstance()
+            }
+            
 
     } catch (err) {
         console.error('Error processing video:', err);
@@ -337,6 +345,7 @@ const callResolution=async()=>{
            if(queuesize===0)
            {
             await deleteQueue(queues[i])
+               await terminateInstance()
            }
         }
   }
