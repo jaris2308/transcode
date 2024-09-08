@@ -183,7 +183,7 @@ async function transcodeToAllResolutions(queueUrl) {
          const data = await sqs.receiveMessage({
           QueueUrl: queueUrl,
           MaxNumberOfMessages: 10,
-          VisibilityTimeout: 10,
+          VisibilityTimeout: 20,
           WaitTimeSeconds: 20
         }).promise();
         console.log("All recieved messages-----------------------",data)
