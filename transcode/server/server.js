@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const slugify=require('slugify')
 const http = require('http');
+const nodemon=require('nodemon')
 require('dotenv').config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -40,9 +41,17 @@ const sqs = new AWS.SQS(sqsConfig);
 const ec2 =new AWS.EC2({region:REGION})
 
 
+
+
+
+
 console.log("REGION:_-----",REGION)
 console.log("SECRET KEY:----",SECRET_KEY)
 console.log("ACCESS KEY:---",ACCESS_KEY)
+
+
+
+
 
 
 const ensureDirectoryExists = async (dirPath) => {
@@ -183,11 +192,16 @@ async function transcodeToAllResolutions(queueUrl) {
          const data = await sqs.receiveMessage({
           QueueUrl: queueUrl,
           MaxNumberOfMessages: 10,
-          VisibilityTimeout: 20,
+          VisibilityTimeout: 43200,
           WaitTimeSeconds: 20
         }).promise();
         console.log("All recieved messages-----------------------",data)
-          const message = data.Messages[0];
+
+        for(let i=0;i<data.Messages.length;i++)
+        {
+
+        
+          const message = data.Messages[i];
          
           console.log('Received message:', message);
           const messageBody = JSON.parse(message.Body); 
@@ -323,6 +337,7 @@ console.log("Chapter:-----",chapter)
             }).promise();
 
             console.log("SUCCESS")
+        }
           await callResolution()
             
             
@@ -354,7 +369,7 @@ const callResolution=async()=>{
    const getAllqueueURL=async()=>{
     try {
   
-  
+  console.log("All queuueur;S")
         const response = await sqs.listQueues().promise();
         if (response.QueueUrls && response.QueueUrls.length > 0) {
           
@@ -399,7 +414,7 @@ const callResolution=async()=>{
     }
   }
 
-  callResolution()
+//   callResolution()
   
 
 
@@ -442,3 +457,8 @@ async function terminateInstance() {
 }
 
 
+const load=async()=>{
+    await callResolution()
+}
+
+load()
