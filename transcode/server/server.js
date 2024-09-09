@@ -10,7 +10,6 @@ const path = require('path');
 const fs = require('fs');
 const slugify=require('slugify')
 const http = require('http');
-const nodemon=require('nodemon')
 require('dotenv').config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
