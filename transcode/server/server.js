@@ -359,7 +359,7 @@ const callResolution=async()=>{
            }
            if(queuesize===0)
            {
-            await deleteQueue(queues[i])
+          
                await terminateInstance()
            }
         }
