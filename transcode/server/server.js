@@ -170,13 +170,14 @@ function generateMasterPlaylist(outputDir, resolutions) {
 }
 
 
-async function uploadFileToS3(filePath, bucketName, key) {
+async function uploadFileToFolder(filePath, bucketName,folderPath, key) {
     console.log("Uploading file:", filePath);
     const fileContent = fs.readFileSync(filePath);
+    const normalizedFolderPath = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
 
     const params = {
         Bucket: bucketName,
-        Key: key,
+        Key: `${normalizedFolderPath}${key}`,
         Body: fileContent
     };
 
@@ -184,7 +185,7 @@ async function uploadFileToS3(filePath, bucketName, key) {
 }
 
 
-async function transcodeToAllResolutions(queueUrl) {
+async function transcodeToAllResolutions(queueUrl,folderPath) {
     const tempFiles = [];
     try { 
         console.log("transcoede to all resolutions",queueUrl)
@@ -236,7 +237,10 @@ async function transcodeToAllResolutions(queueUrl) {
 
         const uploadTasks = [...transcodedFiles, masterPlaylistPath].map(filePath => {
             const fileName = path.basename(filePath);
-            return uploadFileToS3(filePath, 'transcodeedvideos', fileName);
+            const bucketName='transcodeedvideos'
+          
+           return uploadFileToFolder(filePath, bucketName, folderPath,fileName);
+            
         });
 
         const uploadResults = await Promise.all(uploadTasks);
@@ -355,7 +359,8 @@ const callResolution=async()=>{
            queuesize= await getQueueSize(queues[i])
            if(queuesize>0)
            {
-            await transcodeToAllResolutions(queues[i])
+            const folderPath=uuidv4();
+            await transcodeToAllResolutions(queues[i],folderPath)
            }
            if(queuesize===0)
            {
