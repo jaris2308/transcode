@@ -1,25 +1,26 @@
 const express = require('express');
 const dbConfig = require('./config/dbconfig');
-const  Course  =require('./model/courseModel.js')
-const  User  =require('./model/userModel.js')
-const AWS=require('aws-sdk')
+const Course = require('./model/courseModel.js');
+const User = require('./model/userModel.js');
+const AWS = require('aws-sdk');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
-const slugify=require('slugify')
+const slugify = require('slugify');
 const http = require('http');
 require('dotenv').config();
+
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-const decodeURIComponentSafe = (str) => decodeURIComponent(str.replace(/\+/g, '%20'));
-let tempbucket;
 
-const ACCESS_KEY=process.env.ACCESS_KEY
-const SECRET_KEY=process.env.SECRET_KEY
-const REGION=process.env.REGION
-const API_VERSION=process.env.API_VERSION
+const ACCESS_KEY = process.env.ACCESS_KEY;
+const SECRET_KEY = process.env.SECRET_KEY;
+const REGION = process.env.REGION;
+const API_VERSION = process.env.API_VERSION;
+const BUCKET_NAME=process.env.BUCKET_NAME
+const mp4FileName = process.env.mp4FileName;
 
 const awsConfig = {
     accessKeyId: ACCESS_KEY,
@@ -37,390 +38,314 @@ const sqsConfig = {
 
 const S3 = new AWS.S3(awsConfig);
 const sqs = new AWS.SQS(sqsConfig);
-const ec2 =new AWS.EC2({region:REGION})
+const ec2 = new AWS.EC2({ region: REGION });
 
+const folderPath=uuidv4()
+const outputDir = 'output';
 
-
-
-
-
-console.log("REGION:_-----",REGION)
-console.log("SECRET KEY:----",SECRET_KEY)
-console.log("ACCESS KEY:---",ACCESS_KEY)
-
-
-
-
-
-
-const ensureDirectoryExists = async (dirPath) => {
-    return new Promise((resolve, reject) => {
-        fs.mkdir(dirPath, { recursive: true }, (err) => {
-            if (err) reject(err);
-            else resolve();
-        });
-    });
-};
-
-
-
-
-
-async function downloadInputFromS3(inputS3Url) {
-    console.log("Input S3 URL:", inputS3Url);
-
-    const tempDir = path.join(__dirname, '..', '..', 'temp');
-    await ensureDirectoryExists(tempDir);
-
-    const bucketName = inputS3Url.split('/')[2].split('.')[0];
-    let objectKey = inputS3Url.split('/').slice(3).join('/');
-    objectKey = decodeURIComponentSafe(objectKey);
-
-    const params = {
-        Bucket: bucketName,
-        Key: objectKey
-    };
-    console.log("Params:", params);
-
-    const filePath = path.join(tempDir, 'input.mp4');
-    const fileWriteStream = fs.createWriteStream(filePath);
-
-    return new Promise((resolve, reject) => {
-        const s3Stream = S3.getObject(params).createReadStream();
-
-        s3Stream.on('error', reject);
-        fileWriteStream.on('error', reject);
-        fileWriteStream.on('close', () => resolve(filePath));
-
-        s3Stream.pipe(fileWriteStream);
-    });
-}
-
-
-function getResolutionDimensions(resolution) {
-    switch (resolution) {
-        case '1080':
-            return { dimensions: '1920:1080', bandwidth: '5000000' };
-        case '720':
-            return { dimensions: '1280:720', bandwidth: '2500000' };
-        case '480':
-            return { dimensions: '854:480', bandwidth: '1000000' };
-        case '360':
-            return { dimensions: '640:360', bandwidth: '500000' };
-        default:
-            throw new Error('Unsupported resolution');
-    }
-}
-
-
-function transcodeToResolution(inputPath, outputPath, resolution) {
-    const { dimensions, bandwidth } = getResolutionDimensions(resolution);
-    const outputDir = path.dirname(outputPath);
-
-    return new Promise((resolve, reject) => {
-        ensureDirectoryExists(outputDir)
-            .then(() => {
-                console.log(`Starting transcoding to ${resolution}p with dimensions ${dimensions}...`);
-                ffmpeg()
-                    .input(inputPath)
-                    .videoCodec('libx264')
-                    .outputOptions('-preset ultrafast')
-                    .audioCodec('aac')
-                    .videoFilters(`scale=${dimensions}`)
-                    .output(outputPath)
-                    .format('hls')
-                    .outputOptions('-hls_time 10') 
-                    .outputOptions('-hls_list_size 0') 
-                    .outputOptions('-hls_flags independent_segments') 
-                    .outputOptions('-b:v', bandwidth) 
-                    .on('end', () => {
-                        console.log(`Transcoding to ${resolution}p complete.`);
-                        resolve(outputPath);
-                    })
-                    .on('error', (err) => {
-                        console.error(`Error transcoding to ${resolution}p:`, err);
-                        reject(err);
-                    })
-                    .run();
-            })
-            .catch(reject);
-    });
-}
-
-function generateMasterPlaylist(outputDir, resolutions) {
-    const masterPlaylistPath = path.join(outputDir, 'master.m3u8');
-    const playlistLines = [
-        '#EXTM3U',
-        '#EXT-X-VERSION:3'
+const converttoHLS = async (lessontitle,duration,courseId) => {
+    console.log("HLS:------")
+    const resolutions = [
+        {
+            resolution: '640x360',  
+            videoBitrate: '800k',   
+            audioBitrate: '96k'     
+        },
+        {
+            resolution: '854x480',  
+            videoBitrate: '1200k',  
+            audioBitrate: '128k'    
+        },
+        {
+            resolution: '1280x720', 
+            videoBitrate: '2500k',  
+            audioBitrate: '192k'    
+        },
+        {
+            resolution: '1920x1080', 
+            videoBitrate: '4500k',   
+            audioBitrate: '256k'   
+        },
     ];
 
-    resolutions.forEach(({ resolution, filename }) => {
-        const { bandwidth, dimensions } = getResolutionDimensions(resolution);
-        const resolutionLine = `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${dimensions}`;
-        const uriLine = filename;
-        playlistLines.push(resolutionLine, uriLine);
-    });
 
-    return new Promise((resolve, reject) => {
-        fs.writeFile(masterPlaylistPath, playlistLines.join('\n'), (err) => {
-            if (err) reject(err);
-            else resolve(masterPlaylistPath);
+   
+   
+    const variantPlaylists = [];
+
+    // Ensure the output directory exists
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    for (const { resolution, videoBitrate, audioBitrate } of resolutions) {
+        const outputFileName = `${mp4FileName.replace('.', '_')}_${resolution}.m3u8`;
+        const segmentFileName = `${mp4FileName.replace('.', '_')}_${resolution}_%03d.ts`;
+
+        await new Promise((resolve, reject) => {
+            ffmpeg(mp4FileName)
+                .outputOptions([
+                    `-c:v h264`,
+                    `-b:v ${videoBitrate}`,
+                    `-c:a aac`,
+                    `-b:a ${audioBitrate}`,
+                    `-vf scale=${resolution}`,
+                    `-f hls`,
+                    `-hls_time 10`,
+                    `-hls_list_size 0`,
+                    `-hls_segment_filename ${path.join(outputDir, segmentFileName)}`
+                ])
+                .output(path.join(outputDir, outputFileName))
+                .on('end', async () => {
+                    try {
+                        const newOne=fs.readdirSync(outputDir);
+                        console.log("NEW ONE:--",newOne)
+                            console.log('Files in output directory:', fs.readdirSync(outputDir))
+                       await uploadToS3(path.join(outputDir, newOne[1]),newOne[1])
+                        await uploadToS3(path.join(outputDir, outputFileName), outputFileName);
+                        
+    
+                        resolve();
+                    } catch (err) {
+                        reject(err);
+                    }
+                })
+                .on('error', (err) => reject(err))
+                .run();
         });
-    });
-}
 
+        variantPlaylists.push({
+            resolution,
+            outputFileName
+        });
+    }
 
-async function uploadFileToFolder(filePath, bucketName,folderPath, key) {
-    console.log("Uploading file:", filePath);
-    const fileContent = fs.readFileSync(filePath);
-    const normalizedFolderPath = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
-
-    const params = {
-        Bucket: bucketName,
-        Key: `${normalizedFolderPath}${key}`,
-        Body: fileContent
+    const bandwidthMap = {
+        '640x360': 800000,  
+        '854x480': 1200000, 
+        '1280x720': 2500000,
+        '1920x1080': 4500000 
     };
 
-    return S3.upload(params).promise().then(data => data.Location);
-}
+    let masterPlaylist = variantPlaylists.map(({ resolution, outputFileName }) => {
+        const bandwidth = bandwidthMap[resolution] || 0;
 
+        return `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution}\n${outputFileName}`;
+    }).join('\n');
+    masterPlaylist = `#EXTM3U\n${masterPlaylist}`;
 
-async function transcodeToAllResolutions(queueUrl,folderPath) {
-    const tempFiles = [];
-    try { 
-        console.log("transcoede to all resolutions",queueUrl)
-         const data = await sqs.receiveMessage({
-          QueueUrl: queueUrl,
-          MaxNumberOfMessages: 10,
-          VisibilityTimeout: 43200,
-          WaitTimeSeconds: 20
-        }).promise();
-        console.log("All recieved messages-----------------------",data)
-
-        for(let i=0;i<data.Messages.length;i++)
-        {
-
-        
-          const message = data.Messages[i];
-         
-          console.log('Received message:', message);
-          const messageBody = JSON.parse(message.Body); 
-      
-         
-          console.log('Received message body:', messageBody);
-
-        tempbucket=messageBody.videoKey
-           const  localInputPath = await downloadInputFromS3(messageBody.videoKey);
-        console.log("LocalInputPath",localInputPath)
-        tempFiles.push(localInputPath);
-
-        const resolutions = [
-            { resolution: '1080', filename: `output_1080p_${uuidv4()}.m3u8` },
-            { resolution: '720', filename: `output_720p_${uuidv4()}.m3u8` },
-            { resolution: '480', filename: `output_480p_${uuidv4()}.m3u8` },
-            { resolution: '360', filename: `output_360p_${uuidv4()}.m3u8` }
-        ];
-
-        const outputDir = path.join(__dirname, 'sample');
-        await ensureDirectoryExists(outputDir);
-
-        const transcodingTasks = resolutions.map(({ resolution, filename }) => {
-            const outputPath = path.join(outputDir, filename);
-          
-            return transcodeToResolution(localInputPath, outputPath, resolution);
-        });
-
-        const transcodedFiles = await Promise.all(transcodingTasks);
-
-        const masterPlaylistPath = await generateMasterPlaylist(outputDir, resolutions);
-       
-
-        const uploadTasks = [...transcodedFiles, masterPlaylistPath].map(filePath => {
-            const fileName = path.basename(filePath);
-            const bucketName='transcodeedvideos'
-          
-           return uploadFileToFolder(filePath, bucketName, folderPath,fileName);
-            
-        });
-
-        const uploadResults = await Promise.all(uploadTasks);
-        console.log('All HLS segments and master playlist uploaded to S3:', uploadResults);
-
-        const videoUrls = {
-            '360p': uploadResults[3],
-            '480p': uploadResults[2],
-            '720p': uploadResults[1],
-            '1080p': uploadResults[0],
-            'Auto': uploadResults[4]
-        };
-        console.log('Video URLs:', videoUrls);
-                    const course=await Course.findOne({title_id:messageBody.courseId})
-            console.log("Course:------",course)
-             console.log("ChapterId:------",course.chapters[messageBody.chapterNumber]._id)
-          
-           
-            const chapter=course.chapters[messageBody.chapterNumber]._id.toString()===messageBody.chapterId
-console.log("Chapter:-----",chapter)
-            if (chapter) {
-              
-            
-          
-        
-            const newLesson = {
-              title:messageBody.lessontitle,
-              videos:videoUrls,
-              duration:messageBody.durationInSeconds,
-              slug: slugify(messageBody.lessontitle) 
-            };
-          console.log("New Lesson:---------",newLesson)
-            
-            course.chapters[messageBody.chapterNumber].lessons.push(newLesson);
-          
-           
-             await course.save();
-
-             console.log("Before Aggregration")
-             const aggregationPipeline = [
-              { $match: { title_id: messageBody.courseId } },
-              { $unwind: '$chapters' }, 
-              { $unwind: '$chapters.lessons' }, 
-              {
-                $group: {
-                  _id: '$_id',
-                  totalDuration: { $sum: '$chapters.lessons.duration' }
-                }
-              }
-            ];
-          console.log("Before result")
-            const result = await Course.aggregate(aggregationPipeline);
-            console.log("After result")
-          
-            if (result.length > 0) {
-              const totalDuration = result[0].totalDuration;
-             console.log("Total Duration",totalDuration)
-              const existingCourse = await Course.findOne({ title_id: messageBody.courseId }).exec();
-
-        if (!existingCourse) {
-
-      const updatedCourse = await Course.findOneAndUpdate(
-        { title_id: messageBody.courseId },
-        { $set: { courseDuration: totalDuration } },
-        { new: true } 
-        ).populate("mentor", "_id name").exec();
-
-  console.log('Course created and updated:', updatedCourse);
-
-} 
-            
-          
-            }
-          }
-       
-            fs.unlinkSync(localInputPath);
-            transcodedFiles.forEach(file => fs.unlinkSync(file));
-
-
-            const bucketName = tempbucket.split('/')[2].split('.')[0];
-            let objectKey = tempbucket.split('/').slice(3).join('/');
-            objectKey = decodeURIComponentSafe(objectKey);
-        
-            const params = {
-                Bucket: bucketName,
-                Key: objectKey
-            };
-             
-                await S3.deleteObject(params).promise();
-
-
-
+    const masterPlaylistFileName = `${mp4FileName.replace('.', '_')}_master.m3u8`;
+    const masterPlaylistPath = path.join(outputDir, masterPlaylistFileName);
+    fs.writeFileSync(masterPlaylistPath, masterPlaylist);
+    await uploadToS3(masterPlaylistPath, masterPlaylistFileName);
+};
+async function parseS3Url(url) {
+    const regexVirtualHost = /^https:\/\/([^\.]+)\.s3\.(.+?)\.amazonaws\.com\/(.+)$/;
+    const regexPathStyle = /^https:\/\/s3\.(.+?)\.amazonaws\.com\/([^\/]+)\/(.+)$/;
   
-            await sqs.deleteMessage({
-              QueueUrl: queueUrl,
-              ReceiptHandle: message.ReceiptHandle
-            }).promise();
+    let match = url.match(regexVirtualHost);
+    if (match) {
+      return {
+        bucket: match[1],
+        key: match[3]
+      };
+    }
+  
+    match = url.match(regexPathStyle);
+    if (match) {
+      return {
+        bucket: match[2],
+        key: match[3]
+      };
+    }
+  
+    throw new Error('Invalid S3 URL format');
+  }
+  const uploadToS3 = async (filePath, key) => {
+    const fileStream = fs.createReadStream(filePath);
+   
+    const normalizedFolderPath = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
+    
+    // Upload parameters
+    const uploadParams = {
+        Bucket:`${BUCKET_NAME}`,
+        Key: `${normalizedFolderPath}${key}`,
+        Body: fileStream,
+    };
 
-            console.log("SUCCESS")
+    return S3.upload(uploadParams).promise();
+};
+  
+  const downloadVideo = (key, bucketName,downloadPath) => {
+    const params = {
+      Bucket:bucketName,
+      Key: key
+    };
+  
+    return new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(downloadPath);
+      S3.getObject(params)
+        .createReadStream()
+        .pipe(file)
+        .on('finish', () => resolve(downloadPath))
+        .on('error', reject);
+    });
+  };
+  const callResolution = async () => {
+    let queues = [];
+    let queuesize = 0;
+    queues = await getAllQueueURL();
+    console.log("QE=UEUES:--",queues)
+    for (let i = 0; i < queues.length; i++) {
+        queuesize = await getQueueSize(queues[i]);
+        if (queuesize > 0) {
+            await startTranscode(queues[i]);
         }
-          await callResolution()
-            
-            
-
-    } catch (err) {
-        console.error('Error processing video:', err);
+        if (queuesize === 0) {
+            await terminateInstance();
+        }
     }
 }
-const callResolution=async()=>{
-    console.log("Inside call resolution")
-    let queues=[];
-    let queuesize=0;
-    queues=await getAllqueueURL()
-    for(let i=0;i<queues.length;i++)
-        {
-           queuesize= await getQueueSize(queues[i])
-           if(queuesize>0)
-           {
-            const folderPath=uuidv4();
-            await transcodeToAllResolutions(queues[i],folderPath)
-           }
-           if(queuesize===0)
-           {
-          
-               await terminateInstance()
-           }
+
+const startTranscode=async(queueUrl)=>{
+    
+    const data = await sqs.receiveMessage({
+        QueueUrl: queueUrl,
+        MaxNumberOfMessages: 10,
+        VisibilityTimeout: 43200,
+        WaitTimeSeconds: 20
+    }).promise();
+
+
+    console.log("DATA:------",data)
+    for (let i = 0; i < data.Messages.length; i++) {
+        const message = data.Messages[i];
+        const messageBody = JSON.parse(message.Body);
+
+        const localInputPath = await parseS3Url(messageBody.videoKey);
+
+        console.log(localInputPath)
+        const tempbucketName=localInputPath.bucket;
+        const key=localInputPath.key
+        const downloadPath = path.join(__dirname, mp4FileName);
+        await downloadVideo(key,tempbucketName,downloadPath)
+        await converttoHLS()
+        const videoUrls = {
+            '360p': `https://${BUCKET_NAME}.s3.ap-south-1.amazonaws.com/${folderPath}/${mp4FileName}_640x360.m3u8`,
+            '480p': `https://${BUCKET_NAME}.s3.ap-south-1.amazonaws.com/${folderPath}/${mp4FileName}_854x480.m3u8`,
+            '720p': `https://${BUCKET_NAME}.s3.ap-south-1.amazonaws.com/${folderPath}/${mp4FileName}_1280x720.m3u8`,
+            '1080p': `https://${BUCKET_NAME}.s3.ap-south-1.amazonaws.com/${folderPath}/${mp4FileName}_1920x1080.m3u8`,
+            'Auto': `https://${BUCKET_NAME}.s3.ap-south-1.amazonaws.com/${folderPath}/${mp4FileName}_master.m3u8`
+        };
+        
+        
+        const course = await Course.findOne({ title_id: messageBody.courseId });
+        if (course) {
+            const chapter = course.chapters.find(chap => chap._id.toString() === messageBody.chapterId);
+            if (chapter) {
+                const newLesson = {
+                    title: messageBody.lessontitle,
+                    videos: videoUrls,
+                    duration: messageBody.durationInSeconds,
+                    slug: slugify(messageBody.lessontitle)
+                };
+        
+                chapter.lessons.push(newLesson);
+                await course.save();
+        
+                const aggregationPipeline = [
+                    { $match: { title_id: messageBody.courseId } },
+                    { $unwind: '$chapters' },
+                    { $unwind: '$chapters.lessons' },
+                    {
+                        $group: {
+                            _id: '$_id',
+                            totalDuration: { $sum: '$chapters.lessons.duration' }
+                        }
+                    }
+                ];
+        
+                const result = await Course.aggregate(aggregationPipeline);
+        
+                if (result.length > 0) {
+                    const totalDuration = result[0].totalDuration;
+                    await Course.findOneAndUpdate(
+                        { title_id: messageBody.courseId },
+                        { $set: { courseDuration: totalDuration } },
+                        { new: true }
+                    ).populate("mentor", "_id name").exec();
+                }
+            }
         }
-  }
-  
-   const getAllqueueURL=async()=>{
+        const bucketParams = {
+            Bucket: tempbucketName,
+            Key:key
+        };
+        await S3.deleteObject(bucketParams).promise();
+
+        await sqs.deleteMessage({
+            QueueUrl: queueUrl,
+            ReceiptHandle: message.ReceiptHandle
+        }).promise();
+
+        fs.unlink(downloadPath, (err) => {
+            if (err) {
+                console.error('Error deleting file:', err);
+                return;
+            }
+            console.log('File deleted successfully');
+        });
+
+        fs.rm(outputDir, { recursive: true, force: true }, (err) => {
+            if (err) {
+                console.error('Error deleting directory and its contents:', err);
+                return;
+            }
+            console.log('Directory and its contents deleted successfully');
+        });
+        }
+        callResolution()
+}
+
+const getAllQueueURL = async () => {
     try {
-  
-  console.log("All queuueur;S")
         const response = await sqs.listQueues().promise();
-        if (response.QueueUrls && response.QueueUrls.length > 0) {
-          
-            const queueUrls = response.QueueUrls;
-            return queueUrls; 
-          
-        } else {
-          return []
-        }
-      } catch (error) {
+        return response.QueueUrls || [];
+    } catch (error) {
         console.error('Error retrieving queues:', error);
-       
-      }
-  }
-  async function getQueueSize(queueUrl) {
+        return [];
+    }
+}
+
+async function getQueueSize(queueUrl) {
     try {
         const params = {
             QueueUrl: queueUrl,
             AttributeNames: ['ApproximateNumberOfMessages']
         };
         const data = await sqs.getQueueAttributes(params).promise();
-        const queueSize = data.Attributes['ApproximateNumberOfMessages'];
-        console.log(`Queue Size for ${queueUrl}:`, queueSize);
-        return parseInt(queueSize); 
+        return parseInt(data.Attributes['ApproximateNumberOfMessages'], 10);
     } catch (err) {
         console.error('Error fetching queue size:', err);
         throw err;
     }
-  }
-  async function deleteQueue(queueUrl) {
+}
+async function terminateInstance() {
     try {
-      const params = {
-        QueueUrl: queueUrl
-      };
-  
-      const data = await sqs.deleteQueue(params).promise();
-      console.log(`Queue deleted successfully: ${queueUrl}`);
-      return data;
+        const instanceId = await getInstanceId();
+
+        console.log("Instance ID:--------",instanceId)
+        const params = {
+            InstanceIds: [instanceId]
+        };
+        const data = await ec2.terminateInstances(params).promise();
+
+        console.log("Terminate Instance:------",data)
+        await ec2.waitFor('instanceTerminated', { InstanceIds: [instanceId] }).promise();
     } catch (err) {
-      console.error('Error deleting queue:', err);
-      throw err;
+        console.error('Error terminating instance:', err);
     }
-  }
-
-//   callResolution()
-  
-
+}
 
 function getInstanceId() {
     return new Promise((resolve, reject) => {
@@ -438,31 +363,7 @@ function getInstanceId() {
     });
 }
 
-
-async function terminateInstance() {
-    try {
-
-        const instanceId = await getInstanceId();
-        console.log(`Terminating instance with ID: ${instanceId}`);
+callResolution()
 
 
-        const params = {
-            InstanceIds: [instanceId]
-        };
-        const data = await ec2.terminateInstances(params).promise();
-        console.log('Termination request sent:', data);
 
-    
-        await ec2.waitFor('instanceTerminated', { InstanceIds: [instanceId] }).promise();
-        console.log('Instance terminated successfully.');
-    } catch (err) {
-        console.error('Error terminating instance:', err);
-    }
-}
-
-
-const load=async()=>{
-    await callResolution()
-}
-
-load()
