@@ -227,6 +227,7 @@ const startTranscode=async(queueUrl)=>{
         console.log(localInputPath)
         const tempbucketName=localInputPath.bucket;
         const key=localInputPath.key
+        console.log(mp4FileName)
         const downloadPath = path.join(__dirname, mp4FileName);
         await downloadVideo(key,tempbucketName,downloadPath)
         await converttoHLS()
