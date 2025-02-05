@@ -22,6 +22,8 @@ const API_VERSION = process.env.API_VERSION;
 const BUCKET_NAME=process.env.BUCKET_NAME
 const mp4FileName = process.env.mp4FileName;
 
+console.log("Process env",process.env)
+
 const awsConfig = {
     accessKeyId: ACCESS_KEY,
     secretAccessKey: SECRET_KEY,
@@ -227,7 +229,7 @@ const startTranscode=async(queueUrl)=>{
         console.log(localInputPath)
         const tempbucketName=localInputPath.bucket;
         const key=localInputPath.key
-        console.log(mp4FileName)
+        console.log("MP4 FILENAME:",mp4FileName)
         const downloadPath = path.join(__dirname, mp4FileName);
         await downloadVideo(key,tempbucketName,downloadPath)
         await converttoHLS()
